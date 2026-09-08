@@ -2,6 +2,7 @@
 #pragma once
 
 #define IDD_MAIN                101
+#define IDI_APPICON             102
 
 #define IDC_ADAPTER             1001
 #define IDC_REFRESH             1002

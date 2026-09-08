@@ -6,6 +6,9 @@
 // address needs them) and for the version 6 common controls the dialog uses.
 1 RT_MANIFEST "BNET.manifest"
 
+// The only icon resource, so it is what Explorer, the taskbar and Alt-Tab use.
+IDI_APPICON ICON "BNET.ico"
+
 IDD_MAIN DIALOGEX 0, 0, 360, 284
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
 CAPTION "BNET - IP Address Manager"

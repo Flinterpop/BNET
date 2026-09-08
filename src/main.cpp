@@ -598,8 +598,18 @@ void onApplyDone(HWND dlg, LPARAM lparam) {
 INT_PTR CALLBACK DlgProc(HWND dlg, UINT message, WPARAM wparam, LPARAM lparam) {
     switch (message) {
         case WM_INITDIALOG: {
+            // Both sizes explicitly: the small one is the title bar and Alt-Tab,
+            // the big one the taskbar, and letting Windows scale one for the
+            // other is what makes an app icon look smeared.
+            HINSTANCE instance = GetModuleHandleW(nullptr);
             SendMessageW(dlg, WM_SETICON, ICON_SMALL,
-                         reinterpret_cast<LPARAM>(LoadIcon(nullptr, IDI_APPLICATION)));
+                         reinterpret_cast<LPARAM>(LoadImageW(
+                             instance, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON,
+                             GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0)));
+            SendMessageW(dlg, WM_SETICON, ICON_BIG,
+                         reinterpret_cast<LPARAM>(LoadImageW(
+                             instance, MAKEINTRESOURCEW(IDI_APPICON), IMAGE_ICON,
+                             GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0)));
             HWND list = GetDlgItem(dlg, IDC_LIST);
             ListView_SetExtendedListViewStyle(list, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
             LVCOLUMNW column{};
