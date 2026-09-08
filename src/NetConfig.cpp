@@ -57,6 +57,17 @@ std::wstring maskFromPrefix(UINT8 prefixLength) {
     return buf;
 }
 
+AddressState toState(IP_DAD_STATE dad) {
+    switch (dad) {
+        case IpDadStateTentative:  return AddressState::Tentative;
+        case IpDadStateDuplicate:  return AddressState::Duplicate;
+        case IpDadStateDeprecated: return AddressState::Deprecated;
+        case IpDadStatePreferred:  return AddressState::Preferred;
+        case IpDadStateInvalid:
+        default:                   return AddressState::Invalid;
+    }
+}
+
 std::wstring formatMac(const BYTE* bytes, ULONG length) {
     if (length == 0 || length > 8) return {};
     std::wstring out;
@@ -294,6 +305,17 @@ private:
 
 }  // namespace
 
+const wchar_t* stateText(AddressState state) {
+    switch (state) {
+        case AddressState::Preferred:  return L"preferred";
+        case AddressState::Tentative:  return L"tentative";
+        case AddressState::Duplicate:  return L"DUPLICATE";
+        case AddressState::Deprecated: return L"deprecated";
+        case AddressState::Invalid:    break;
+    }
+    return L"invalid";
+}
+
 // -------------------------------------------------------------------------
 
 std::vector<AdapterInfo> enumerateAdapters(std::wstring& error) {
@@ -341,12 +363,19 @@ std::vector<AdapterInfo> enumerateAdapters(std::wstring& error) {
         for (const IP_ADAPTER_UNICAST_ADDRESS* ua = aa->FirstUnicastAddress; ua; ua = ua->Next) {
             std::wstring ip = toString(ua->Address.lpSockaddr);
             if (ip.empty()) continue;
-            // A 169.254.x.x autoconfiguration address is not something the user
-            // set, and offering it back as a static address would be a trap.
-            if (ip.rfind(L"169.254.", 0) == 0) continue;
+
             AddressV4 addr;
             addr.ip = ip;
             addr.mask = maskFromPrefix(ua->OnLinkPrefixLength);
+            addr.state = toState(ua->DadState);
+            addr.manual = ua->PrefixOrigin == IpPrefixOriginManual;
+
+            // A 169.254.x.x autoconfiguration address is not something the user
+            // set, and offering it back as a static address would be a trap.
+            // One that was set by hand is a different thing, so the test is the
+            // origin and not just the prefix.
+            if (!addr.manual && ip.rfind(L"169.254.", 0) == 0) continue;
+
             info.addresses.push_back(addr);
         }
         for (const IP_ADAPTER_GATEWAY_ADDRESS* g = aa->FirstGatewayAddress; g; g = g->Next) {

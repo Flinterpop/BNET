@@ -21,6 +21,7 @@ constexpr UINT WM_APP_APPLY_DONE = WM_APP + 1;
 
 std::vector<net::AdapterInfo> g_adapters;
 bool g_applying = false;
+net::ApplyRequest g_lastRequest;   // what the last Apply asked for, for verification
 
 // --------------------------------------------------------------- utilities
 
@@ -94,7 +95,8 @@ std::wstring listText(HWND dlg, int row, int column) {
     return buf;
 }
 
-void listAdd(HWND dlg, const std::wstring& ip, const std::wstring& mask) {
+void listAdd(HWND dlg, const std::wstring& ip, const std::wstring& mask,
+             const std::wstring& state = std::wstring()) {
     LVITEMW item{};
     item.mask = LVIF_TEXT;
     item.iItem = listCount(dlg);
@@ -105,6 +107,10 @@ void listAdd(HWND dlg, const std::wstring& ip, const std::wstring& mask) {
     item.iItem = row;
     item.iSubItem = 1;
     item.pszText = const_cast<LPWSTR>(mask.c_str());
+    SendDlgItemMessageW(dlg, IDC_LIST, LVM_SETITEMTEXTW, static_cast<WPARAM>(row),
+                        reinterpret_cast<LPARAM>(&item));
+    item.iSubItem = 2;
+    item.pszText = const_cast<LPWSTR>(state.c_str());
     SendDlgItemMessageW(dlg, IDC_LIST, LVM_SETITEMTEXTW, static_cast<WPARAM>(row),
                         reinterpret_cast<LPARAM>(&item));
 }
@@ -136,6 +142,10 @@ void showAdapter(HWND dlg, const net::AdapterInfo& a) {
     if (!a.macAddress.empty()) info += L"   MAC " + a.macAddress;
     info += a.operational ? L"   [connected]" : L"   [not connected]";
     info += a.dhcpEnabled ? L"   currently DHCP" : L"   currently static";
+    // A primary address the stack has but has not accepted is the whole reason
+    // this dialog and ipconfig can disagree, so it is said out loud.
+    if (!a.addresses.empty() && a.addresses[0].state != net::AddressState::Preferred)
+        info += std::wstring(L"   primary is ") + net::stateText(a.addresses[0].state);
     SetDlgItemTextW(dlg, IDC_ADAPTER_INFO, info.c_str());
 
     CheckRadioButton(dlg, IDC_RAD_DHCP, IDC_RAD_STATIC,
@@ -153,8 +163,11 @@ void showAdapter(HWND dlg, const net::AdapterInfo& a) {
     setIpField(dlg, IDC_ADD_MASK, L"");
 
     SendDlgItemMessageW(dlg, IDC_LIST, LVM_DELETEALLITEMS, 0, 0);
-    for (size_t i = 1; i < a.addresses.size(); ++i)
-        listAdd(dlg, a.addresses[i].ip, a.addresses[i].mask);
+    for (size_t i = 1; i < a.addresses.size(); ++i) {
+        const net::AddressV4& extra = a.addresses[i];
+        listAdd(dlg, extra.ip, extra.mask,
+                extra.state == net::AddressState::Preferred ? L"" : net::stateText(extra.state));
+    }
 }
 
 void loadAdapters(HWND dlg, const std::wstring& preferSettingId) {
@@ -367,6 +380,7 @@ bool buildRequest(HWND dlg, net::ApplyRequest& req) {
 void onApply(HWND dlg) {
     net::ApplyRequest req;
     if (!buildRequest(dlg, req)) return;
+    g_lastRequest = req;
 
     setBusy(dlg, true);
     setStatus(dlg, req.useDhcp ? L"Switching to DHCP..." : L"Applying addresses...");
@@ -382,25 +396,92 @@ void onApply(HWND dlg) {
     }).detach();
 }
 
+// WMI reporting success only means the request was accepted, not that the stack
+// took it -- an address can be written and then rejected by duplicate address
+// detection, or written to the registry only. So the applied set is compared
+// against what the adapter actually reports, and any gap is said plainly. This
+// is the difference between the dialog agreeing with ipconfig and merely
+// claiming to.
+void verifyApplied(HWND dlg, const net::ApplyRequest& req) {
+    if (req.useDhcp) return;
+    const net::AdapterInfo* adapter = currentAdapter(dlg);
+    if (!adapter) return;
+
+    std::wstring missing, rejected;
+    for (const net::AddressV4& wanted : req.addresses) {
+        const net::AddressV4* found = nullptr;
+        for (const net::AddressV4& have : adapter->addresses) {
+            if (have.ip == wanted.ip) { found = &have; break; }
+        }
+        if (!found) {
+            missing += L"    " + wanted.ip + L"\n";
+        } else if (found->state != net::AddressState::Preferred) {
+            rejected += L"    " + wanted.ip + L"  (" + net::stateText(found->state) + L")\n";
+        }
+    }
+
+    if (!missing.empty()) {
+        setStatus(dlg, L"Windows did not keep every address -- see the message.");
+        MessageBoxW(dlg,
+                    (L"Windows accepted the request but these addresses are not on the "
+                     L"adapter:\n\n" + missing +
+                     L"\nThere is no separate activation step, so this means the stack "
+                     L"never took them. The usual causes are:\n\n"
+                     L"    - a restart is pending, and the change is in the registry only\n"
+                     L"    - something reverted it: group policy, a VPN client, NIC teaming\n"
+                     L"      or a Hyper-V switch owning the adapter\n\n"
+                     L"Confirm with:  netsh interface ipv4 show addresses").c_str(),
+                    L"BNET -- not all addresses took", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    if (!rejected.empty()) {
+        setStatus(dlg, L"Applied, but the network rejected an address.");
+        MessageBoxW(dlg,
+                    (L"These addresses are configured but the network has not accepted "
+                     L"them:\n\n" + rejected +
+                     L"\nA duplicate means another host already has that address, so "
+                     L"ipconfig will not show it as usable and it will carry no traffic. "
+                     L"Pick a free address, or find the host holding it.").c_str(),
+                    L"BNET -- address not usable", MB_OK | MB_ICONWARNING);
+    }
+}
+
 void onApplyDone(HWND dlg, LPARAM lparam) {
     net::ApplyResult* result = reinterpret_cast<net::ApplyResult*>(lparam);
     std::wstring settingId;
     if (const net::AdapterInfo* a = currentAdapter(dlg)) settingId = a->settingId;
 
     setBusy(dlg, false);
-    if (result->ok) {
-        setStatus(dlg, result->message);
-    } else {
-        setStatus(dlg, L"Not applied: " + result->message);
-        MessageBoxW(dlg, result->message.c_str(), L"BNET -- not applied", MB_OK | MB_ICONERROR);
-    }
     bool ok = result->ok;
+    bool rebootRequired = result->rebootRequired;
     std::wstring message = result->message;
     delete result;
 
+    if (!ok) {
+        setStatus(dlg, L"Not applied: " + message);
+        MessageBoxW(dlg, message.c_str(), L"BNET -- not applied", MB_OK | MB_ICONERROR);
+        loadAdapters(dlg, settingId);
+        return;
+    }
+
     // Re-read rather than trust the request: this is the only honest confirmation.
     loadAdapters(dlg, settingId);
-    if (ok) setStatus(dlg, message);
+    setStatus(dlg, message);
+
+    // A restart-required result means the registry has the change and the running
+    // stack does not, which looks exactly like the app lying. Too important to
+    // leave as the tail of a status line that may be clipped.
+    if (rebootRequired) {
+        MessageBoxW(dlg,
+                    L"Windows stored the change but asked for a restart before it takes "
+                    L"effect.\n\nUntil then the registry and the running stack disagree, "
+                    L"so ipconfig will not show the new configuration.",
+                    L"BNET -- restart required", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    verifyApplied(dlg, g_lastRequest);
 }
 
 // ------------------------------------------------------------- dialog proc
@@ -422,6 +503,10 @@ INT_PTR CALLBACK DlgProc(HWND dlg, UINT message, WPARAM wparam, LPARAM lparam) {
             column.pszText = const_cast<LPWSTR>(L"Subnet mask");
             column.iSubItem = 1;
             ListView_InsertColumn(list, 1, &column);
+            column.cx = 150;
+            column.pszText = const_cast<LPWSTR>(L"State");
+            column.iSubItem = 2;
+            ListView_InsertColumn(list, 2, &column);
 
             loadAdapters(dlg, L"");
             setStatus(dlg, L"Ready. Changes are committed only when you press Apply.");

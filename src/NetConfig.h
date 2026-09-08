@@ -11,9 +11,18 @@
 
 namespace net {
 
+// Duplicate address detection can reject an address that is still reported by
+// GetAdaptersAddresses. ipconfig flags or hides those, so ignoring this is how
+// the dialog and ipconfig come to disagree about the same adapter.
+enum class AddressState { Preferred, Tentative, Duplicate, Deprecated, Invalid };
+
+const wchar_t* stateText(AddressState state);
+
 struct AddressV4 {
     std::wstring ip;
     std::wstring mask;
+    AddressState state = AddressState::Preferred;
+    bool manual = true;                 // false when DHCP or autoconfiguration set it
 };
 
 struct AdapterInfo {

@@ -56,7 +56,28 @@ busy adapter and a frozen dialog looks like a crash.
   opening a second dialog.
 - **A blank gateway clears the gateway.** Blank DNS fields clear the static DNS list, which
   hands DNS back to DHCP.
+- **Windows does not allow additional static addresses while DHCP is on**, and neither does
+  this — the list is disabled under DHCP, the same as the *Advanced* dialog.
 - IPv6 is not touched. This is an IPv4 tool.
+
+## If an address doesn't appear in ipconfig
+
+**There is no activation step.** `EnableStatic` writes the address and the running stack
+takes it immediately — nothing to enable, no restart, no adapter bounce. So an address that
+Apply accepted but `ipconfig` does not list is not waiting to be activated; it is not there,
+or it is there and unusable. BNET checks for both after every Apply and says which:
+
+- **"address not usable"** — the address is on the adapter but duplicate address detection
+  rejected it, almost always because another host on the segment already has it. The
+  additional-address list shows `DUPLICATE` in its State column, and `ipconfig` will not
+  present it as usable. Pick a free address, or find the host holding it.
+- **"not all addresses took"** — the stack does not have it at all. Either a restart is
+  pending and the change is in the registry only, or something reverted it: group policy, a
+  VPN client, NIC teaming, or a Hyper-V switch that owns the adapter.
+
+`netsh interface ipv4 show addresses` is the authority, and will agree with what BNET says.
+
+The State column is blank for a healthy address; it only ever shows a problem.
 
 ## Building
 
