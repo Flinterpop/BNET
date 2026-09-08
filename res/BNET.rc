@@ -24,7 +24,7 @@ BEGIN
     LTEXT           "IP address:", IDC_LBL_IP, 24, 79, 70, 8
     CONTROL         "", IDC_IP, "SysIPAddress32", WS_TABSTOP, 98, 77, 110, 12
     LTEXT           "Subnet mask:", IDC_LBL_MASK, 24, 94, 70, 8
-    CONTROL         "", IDC_MASK, "SysIPAddress32", WS_TABSTOP, 98, 92, 110, 12
+    COMBOBOX        IDC_MASK, 98, 91, 110, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     LTEXT           "Default gateway:", IDC_LBL_GW, 24, 109, 70, 8
     CONTROL         "", IDC_GW, "SysIPAddress32", WS_TABSTOP, 98, 107, 110, 12
     LTEXT           "Preferred DNS:", IDC_LBL_DNS1, 24, 124, 70, 8
@@ -32,8 +32,12 @@ BEGIN
     LTEXT           "Alternate DNS:", IDC_LBL_DNS2, 24, 139, 70, 8
     CONTROL         "", IDC_DNS2, "SysIPAddress32", WS_TABSTOP, 98, 137, 110, 12
 
-    LTEXT           "Leave the gateway blank to remove it. DNS servers are optional; leaving both blank clears the static list and lets DHCP supply them.",
-                    IDC_HINT, 218, 79, 130, 60
+    LTEXT           "Preset:", IDC_LBL_PRESET, 218, 79, 28, 8
+    COMBOBOX        IDC_PRESET, 248, 77, 100, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Use as &primary", IDC_PRESET_PRIMARY, 218, 92, 63, 14
+    PUSHBUTTON      "Add to &list", IDC_PRESET_ADD, 285, 92, 63, 14
+    LTEXT           "Leave the gateway blank to remove it.",
+                    IDC_HINT, 218, 112, 130, 24
 
     GROUPBOX        "Additional IP addresses on this adapter", -1, 7, 158, 347, 96
     CONTROL         "", IDC_LIST, "SysListView32",
@@ -42,9 +46,9 @@ BEGIN
     LTEXT           "IP:", -1, 14, 236, 10, 8
     CONTROL         "", IDC_ADD_IP, "SysIPAddress32", WS_TABSTOP, 26, 234, 90, 12
     LTEXT           "Mask:", -1, 122, 236, 22, 8
-    CONTROL         "", IDC_ADD_MASK, "SysIPAddress32", WS_TABSTOP, 146, 234, 90, 12
-    PUSHBUTTON      "A&dd", IDC_ADD, 242, 233, 50, 14
-    PUSHBUTTON      "&Remove", IDC_REMOVE, 297, 233, 50, 14
+    COMBOBOX        IDC_ADD_MASK, 146, 233, 96, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "A&dd", IDC_ADD, 247, 233, 48, 14
+    PUSHBUTTON      "&Remove", IDC_REMOVE, 299, 233, 48, 14
 
     LTEXT           "", IDC_STATUS, 7, 262, 226, 16
     DEFPUSHBUTTON   "&Apply", IDC_APPLY, 239, 261, 55, 16

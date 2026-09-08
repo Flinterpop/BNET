@@ -15,12 +15,16 @@
 #define IDC_DNS1                1015
 #define IDC_DNS2                1016
 #define IDC_HINT                1017
+#define IDC_PRESET              1018
+#define IDC_LBL_PRESET          1019
 
 #define IDC_LIST                1020
 #define IDC_ADD_IP              1021
 #define IDC_ADD_MASK            1022
 #define IDC_ADD                 1023
 #define IDC_REMOVE              1024
+#define IDC_PRESET_PRIMARY      1026
+#define IDC_PRESET_ADD          1027
 
 #define IDC_STATUS              1030
 #define IDC_APPLY               1031

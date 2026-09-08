@@ -47,7 +47,7 @@ std::wstring toString(const sockaddr* sa) {
     return buf;
 }
 
-std::wstring maskFromPrefix(UINT8 prefixLength) {
+std::wstring maskFromPrefixLength(UINT8 prefixLength) {
     ULONG mask = 0;
     if (ConvertLengthToIpv4Mask(prefixLength, &mask) != NO_ERROR) return {};
     IN_ADDR a;
@@ -305,6 +305,22 @@ private:
 
 }  // namespace
 
+std::wstring maskFromPrefix(int prefix) {
+    if (prefix < 1 || prefix > 32) return {};
+    return maskFromPrefixLength(static_cast<UINT8>(prefix));
+}
+
+bool prefixFromMask(const std::wstring& mask, int& prefix) {
+    IN_ADDR a{};
+    if (mask.empty() || InetPtonW(AF_INET, mask.c_str(), &a) != 1) return false;
+    ULONG value = ntohl(a.S_un.S_addr);
+    ULONG inverted = ~value;
+    if ((inverted & (inverted + 1)) != 0) return false;   // ones must be contiguous
+    prefix = 0;
+    while (value & 0x80000000u) { ++prefix; value <<= 1; }
+    return prefix >= 1 && prefix <= 32;
+}
+
 const wchar_t* stateText(AddressState state) {
     switch (state) {
         case AddressState::Preferred:  return L"preferred";
@@ -366,7 +382,7 @@ std::vector<AdapterInfo> enumerateAdapters(std::wstring& error) {
 
             AddressV4 addr;
             addr.ip = ip;
-            addr.mask = maskFromPrefix(ua->OnLinkPrefixLength);
+            addr.mask = maskFromPrefixLength(ua->OnLinkPrefixLength);
             addr.state = toState(ua->DadState);
             addr.manual = ua->PrefixOrigin == IpPrefixOriginManual;
 

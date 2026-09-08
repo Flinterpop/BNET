@@ -18,6 +18,7 @@ endif()
 add_executable(BNET WIN32
     src/main.cpp
     src/NetConfig.cpp
+    src/Presets.cpp
     res/BNET.rc
 )
 

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "NetConfig.h"
+#include "Presets.h"
 #include "resource.h"
 
 namespace {
@@ -22,6 +23,7 @@ constexpr UINT WM_APP_APPLY_DONE = WM_APP + 1;
 std::vector<net::AdapterInfo> g_adapters;
 bool g_applying = false;
 net::ApplyRequest g_lastRequest;   // what the last Apply asked for, for verification
+std::vector<presets::Preset> g_presets;
 
 // --------------------------------------------------------------- utilities
 
@@ -63,12 +65,52 @@ FieldState getIpField(HWND dlg, int id, std::wstring& text) {
     return FieldState::Filled;
 }
 
-// A mask is legal only if it is a run of ones followed by a run of zeroes.
-bool isContiguousMask(DWORD mask) {
-    if (mask == 0 || mask == 0xFFFFFFFFu) return false;
-    DWORD inverted = ~mask;
-    return (inverted & (inverted + 1)) == 0;
+// ------------------------------------------------------------ subnet masks
+//
+// There are only 32 legal IPv4 masks -- a run of ones then a run of zeroes --
+// so the mask entry is a pick list of all of them rather than free text. That
+// makes an invalid mask unrepresentable instead of merely rejected, which is
+// why nothing below validates one.
+
+constexpr int kDefaultPrefix = 24;   // 255.255.255.0
+
+// Listed longest prefix first, so the small subnets people actually pick sit at
+// the top of the list instead of 24 rows down it.
+int maskIndexForPrefix(int prefix) { return 32 - prefix; }
+
+void fillMaskList(HWND dlg, int id) {
+    HWND combo = GetDlgItem(dlg, id);
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    for (int prefix = 32; prefix >= 1; --prefix) {
+        wchar_t label[48];
+        swprintf_s(label, L"%s   /%d", net::maskFromPrefix(prefix).c_str(), prefix);
+        LRESULT index = SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
+        if (index >= 0)
+            SendMessageW(combo, CB_SETITEMDATA, static_cast<WPARAM>(index),
+                         static_cast<LPARAM>(prefix));
+    }
+    SendMessageW(combo, CB_SETCURSEL,
+                 static_cast<WPARAM>(maskIndexForPrefix(kDefaultPrefix)), 0);
 }
+
+// An unrecognised or absent mask falls back to the default rather than leaving
+// the list unset, so the field is never empty.
+void setMaskField(HWND dlg, int id, const std::wstring& mask) {
+    int prefix = kDefaultPrefix;
+    int parsed = 0;
+    if (net::prefixFromMask(mask, parsed)) prefix = parsed;
+    SendDlgItemMessageW(dlg, id, CB_SETCURSEL,
+                        static_cast<WPARAM>(maskIndexForPrefix(prefix)), 0);
+}
+
+std::wstring getMaskField(HWND dlg, int id) {
+    LRESULT sel = SendDlgItemMessageW(dlg, id, CB_GETCURSEL, 0, 0);
+    if (sel == CB_ERR) return net::maskFromPrefix(kDefaultPrefix);
+    LRESULT prefix = SendDlgItemMessageW(dlg, id, CB_GETITEMDATA, static_cast<WPARAM>(sel), 0);
+    if (prefix < 1 || prefix > 32) return net::maskFromPrefix(kDefaultPrefix);
+    return net::maskFromPrefix(static_cast<int>(prefix));
+}
+
 
 void setStatus(HWND dlg, const std::wstring& text) {
     SetDlgItemTextW(dlg, IDC_STATUS, text.c_str());
@@ -128,13 +170,105 @@ std::vector<net::AddressV4> listContents(HWND dlg) {
     return out;
 }
 
+// Shared by the Add button and by sending a preset to the list, so both refuse
+// a duplicate for the same reason and say the same thing.
+bool addAddressToList(HWND dlg, const std::wstring& ip, const std::wstring& mask) {
+    std::wstring primary;
+    if (getIpField(dlg, IDC_IP, primary) == FieldState::Filled && primary == ip) {
+        warn(dlg, L"That is already the primary address.");
+        return false;
+    }
+    for (const net::AddressV4& existing : listContents(dlg)) {
+        if (existing.ip == ip) {
+            warn(dlg, L"That address is already in the list.");
+            return false;
+        }
+    }
+    listAdd(dlg, ip, mask);
+    return true;
+}
+
 // ----------------------------------------------------------- dialog filling
+
+// A preset can go to the primary fields or into the additional list, so the
+// destination is an explicit button rather than a side effect of choosing one
+// -- picking a preset must never silently overwrite an address already typed.
+void updatePresetButtons(HWND dlg, bool enabled) {
+    LRESULT sel = SendDlgItemMessageW(dlg, IDC_PRESET, CB_GETCURSEL, 0, 0);
+    bool usable = enabled && sel > 0 && static_cast<size_t>(sel) <= g_presets.size();
+    EnableWindow(GetDlgItem(dlg, IDC_PRESET_PRIMARY), usable ? TRUE : FALSE);
+    EnableWindow(GetDlgItem(dlg, IDC_PRESET_ADD), usable ? TRUE : FALSE);
+}
 
 void enableStaticFields(HWND dlg, bool on) {
     static const int ids[] = {IDC_IP, IDC_MASK, IDC_GW, IDC_DNS1, IDC_DNS2,
                               IDC_LBL_IP, IDC_LBL_MASK, IDC_LBL_GW, IDC_LBL_DNS1, IDC_LBL_DNS2,
                               IDC_LIST, IDC_ADD_IP, IDC_ADD_MASK, IDC_ADD, IDC_REMOVE};
     for (int id : ids) EnableWindow(GetDlgItem(dlg, id), on ? TRUE : FALSE);
+    // The preset list only makes sense when a static address is being entered,
+    // but it stays disabled if there was no file to load.
+    EnableWindow(GetDlgItem(dlg, IDC_LBL_PRESET), on ? TRUE : FALSE);
+    EnableWindow(GetDlgItem(dlg, IDC_PRESET), (on && !g_presets.empty()) ? TRUE : FALSE);
+    updatePresetButtons(dlg, on && !g_presets.empty());
+}
+
+// ------------------------------------------------------------------ presets
+//
+// The list is whatever the operator put in BNET.presets.txt beside the exe.
+// Nothing is compiled in on purpose -- see Presets.h.
+
+void fillPresetList(HWND dlg) {
+    std::wstring path, problems;
+    g_presets = presets::load(path, problems);
+
+    HWND combo = GetDlgItem(dlg, IDC_PRESET);
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+
+    if (g_presets.empty()) {
+        SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"(no presets file)"));
+        SendMessageW(combo, CB_SETCURSEL, 0, 0);
+        EnableWindow(combo, FALSE);
+        SetDlgItemTextW(dlg, IDC_HINT, (L"For named presets, create " + path).c_str());
+        return;
+    }
+
+    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"(choose a preset)"));
+    for (const presets::Preset& preset : g_presets) {
+        std::wstring label = preset.name + L"  --  " + preset.ip;
+        SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+    }
+    SendMessageW(combo, CB_SETCURSEL, 0, 0);
+    if (!problems.empty()) setStatus(dlg, problems);
+}
+
+const presets::Preset* selectedPreset(HWND dlg) {
+    LRESULT sel = SendDlgItemMessageW(dlg, IDC_PRESET, CB_GETCURSEL, 0, 0);
+    if (sel <= 0 || static_cast<size_t>(sel) > g_presets.size()) return nullptr;
+    return &g_presets[static_cast<size_t>(sel - 1)];
+}
+
+// Either destination only fills the dialog -- Apply stays the one thing that
+// touches the adapter.
+void onPresetToPrimary(HWND dlg) {
+    const presets::Preset* preset = selectedPreset(dlg);
+    if (!preset) return;
+
+    CheckRadioButton(dlg, IDC_RAD_DHCP, IDC_RAD_STATIC, IDC_RAD_STATIC);
+    enableStaticFields(dlg, true);
+    setIpField(dlg, IDC_IP, preset->ip);
+    setMaskField(dlg, IDC_MASK, preset->mask);
+    if (!preset->gateway.empty()) setIpField(dlg, IDC_GW, preset->gateway);
+
+    setStatus(dlg, L"Preset \"" + preset->name + L"\" is now the primary address. "
+                   L"Nothing is committed until you press Apply.");
+}
+
+void onPresetToList(HWND dlg) {
+    const presets::Preset* preset = selectedPreset(dlg);
+    if (!preset) return;
+    if (!addAddressToList(dlg, preset->ip, preset->mask)) return;
+    setStatus(dlg, L"Added preset \"" + preset->name + L"\" (" + preset->ip +
+                   L") to the list. Nothing is committed until you press Apply.");
 }
 
 void showAdapter(HWND dlg, const net::AdapterInfo& a) {
@@ -155,12 +289,12 @@ void showAdapter(HWND dlg, const net::AdapterInfo& a) {
     // The current values are shown either way: under DHCP they are what the
     // server handed out, which is the sane starting point for going static.
     setIpField(dlg, IDC_IP, a.addresses.empty() ? L"" : a.addresses[0].ip);
-    setIpField(dlg, IDC_MASK, a.addresses.empty() ? L"" : a.addresses[0].mask);
+    setMaskField(dlg, IDC_MASK, a.addresses.empty() ? L"" : a.addresses[0].mask);
     setIpField(dlg, IDC_GW, a.gateways.empty() ? L"" : a.gateways[0]);
     setIpField(dlg, IDC_DNS1, a.dnsServers.size() > 0 ? a.dnsServers[0] : L"");
     setIpField(dlg, IDC_DNS2, a.dnsServers.size() > 1 ? a.dnsServers[1] : L"");
     setIpField(dlg, IDC_ADD_IP, L"");
-    setIpField(dlg, IDC_ADD_MASK, L"");
+    setMaskField(dlg, IDC_ADD_MASK, L"");
 
     SendDlgItemMessageW(dlg, IDC_LIST, LVM_DELETEALLITEMS, 0, 0);
     for (size_t i = 1; i < a.addresses.size(); ++i) {
@@ -255,36 +389,13 @@ bool readOptional(HWND dlg, int id, const wchar_t* label, std::wstring& out) {
     return false;
 }
 
-bool checkMask(HWND dlg, int id, const std::wstring& mask) {
-    DWORD value = 0;
-    if (ipToHost(mask, value) && isContiguousMask(value)) return true;
-    warn(dlg, L"\"" + mask + L"\" is not a valid subnet mask. A mask must be a run of "
-              L"ones followed by a run of zeroes, such as 255.255.255.0.");
-    SetFocus(GetDlgItem(dlg, id));
-    return false;
-}
-
 void onAdd(HWND dlg) {
-    std::wstring ip, mask;
+    std::wstring ip;
     if (!readRequired(dlg, IDC_ADD_IP, L"IP address to add", ip)) return;
-    if (!readRequired(dlg, IDC_ADD_MASK, L"subnet mask for the address to add", mask)) return;
-    if (!checkMask(dlg, IDC_ADD_MASK, mask)) return;
+    if (!addAddressToList(dlg, ip, getMaskField(dlg, IDC_ADD_MASK))) return;
 
-    std::wstring primary;
-    if (getIpField(dlg, IDC_IP, primary) == FieldState::Filled && primary == ip) {
-        warn(dlg, L"That is already the primary address.");
-        return;
-    }
-    for (const net::AddressV4& existing : listContents(dlg)) {
-        if (existing.ip == ip) {
-            warn(dlg, L"That address is already in the list.");
-            return;
-        }
-    }
-
-    listAdd(dlg, ip, mask);
     setIpField(dlg, IDC_ADD_IP, L"");
-    setIpField(dlg, IDC_ADD_MASK, L"");
+    setMaskField(dlg, IDC_ADD_MASK, L"");
     SetFocus(GetDlgItem(dlg, IDC_ADD_IP));
     setStatus(dlg, L"Added " + ip + L". Nothing is committed until you press Apply.");
 }
@@ -309,7 +420,7 @@ void onEditInPlace(HWND dlg) {
     std::wstring mask = listText(dlg, row, 1);
     SendDlgItemMessageW(dlg, IDC_LIST, LVM_DELETEITEM, static_cast<WPARAM>(row), 0);
     setIpField(dlg, IDC_ADD_IP, ip);
-    setIpField(dlg, IDC_ADD_MASK, mask);
+    setMaskField(dlg, IDC_ADD_MASK, mask);
     SetFocus(GetDlgItem(dlg, IDC_ADD_IP));
     setStatus(dlg, L"Editing " + ip + L". Press Add to put it back.");
 }
@@ -334,15 +445,13 @@ bool buildRequest(HWND dlg, net::ApplyRequest& req) {
 
     if (req.useDhcp) return true;
 
-    std::wstring ip, mask, gateway;
+    std::wstring ip, gateway;
     if (!readRequired(dlg, IDC_IP, L"IP address", ip)) return false;
-    if (!readRequired(dlg, IDC_MASK, L"subnet mask", mask)) return false;
-    if (!checkMask(dlg, IDC_MASK, mask)) return false;
+    std::wstring mask = getMaskField(dlg, IDC_MASK);
     if (!readOptional(dlg, IDC_GW, L"default gateway", gateway)) return false;
 
     req.addresses.push_back({ip, mask});
     for (const net::AddressV4& extra : listContents(dlg)) {
-        if (!checkMask(dlg, IDC_LIST, extra.mask)) return false;
         if (extra.ip == ip) {
             warn(dlg, L"The primary address " + ip + L" is also in the additional list.");
             return false;
@@ -508,6 +617,12 @@ INT_PTR CALLBACK DlgProc(HWND dlg, UINT message, WPARAM wparam, LPARAM lparam) {
             column.iSubItem = 2;
             ListView_InsertColumn(list, 2, &column);
 
+            // Both mask lists must exist before the first adapter is shown,
+            // since showing one selects into them.
+            fillMaskList(dlg, IDC_MASK);
+            fillMaskList(dlg, IDC_ADD_MASK);
+            fillPresetList(dlg);
+
             loadAdapters(dlg, L"");
             setStatus(dlg, L"Ready. Changes are committed only when you press Apply.");
             return TRUE;
@@ -545,8 +660,9 @@ INT_PTR CALLBACK DlgProc(HWND dlg, UINT message, WPARAM wparam, LPARAM lparam) {
                 case IDC_REFRESH: {
                     std::wstring settingId;
                     if (const net::AdapterInfo* a = currentAdapter(dlg)) settingId = a->settingId;
+                    fillPresetList(dlg);
                     loadAdapters(dlg, settingId);
-                    setStatus(dlg, L"Re-read from the system.");
+                    setStatus(dlg, L"Re-read from the system, presets reloaded.");
                     return TRUE;
                 }
 
@@ -557,6 +673,20 @@ INT_PTR CALLBACK DlgProc(HWND dlg, UINT message, WPARAM wparam, LPARAM lparam) {
                 case IDC_RAD_STATIC:
                     enableStaticFields(dlg, true);
                     SetFocus(GetDlgItem(dlg, IDC_IP));
+                    return TRUE;
+
+                case IDC_PRESET:
+                    if (HIWORD(wparam) == CBN_SELCHANGE)
+                        updatePresetButtons(dlg, !g_applying &&
+                                            IsDlgButtonChecked(dlg, IDC_RAD_STATIC) == BST_CHECKED);
+                    return TRUE;
+
+                case IDC_PRESET_PRIMARY:
+                    onPresetToPrimary(dlg);
+                    return TRUE;
+
+                case IDC_PRESET_ADD:
+                    onPresetToList(dlg);
                     return TRUE;
 
                 case IDC_ADD:

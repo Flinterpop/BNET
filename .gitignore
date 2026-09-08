@@ -11,3 +11,6 @@ CMakeUserPresets.json
 # Logs and scratch
 *.log
 claude-scratch/
+
+# Real presets name real networks -- never commit one (see presets.example.txt)
+BNET.presets.txt

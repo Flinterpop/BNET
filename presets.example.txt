@@ -1,0 +1,22 @@
+# BNET presets -- the named IP/mask entries offered in the dialog's Preset list.
+#
+# Copy this file to BNET.presets.txt, in the same directory as BNET.exe, and put
+# your own networks in it. BNET.presets.txt is deliberately gitignored: a preset
+# names a real network, and real addresses, hostnames and MACs do not belong in
+# a public repository -- which is also why none of this is compiled in. The
+# entries below use documentation addresses only.
+#
+# One preset per line:
+#
+#     <name> = <ip>/<prefix>[, <gateway>]
+#
+# The mask may be a prefix length or dotted:   /24   or   /255.255.255.0
+# The gateway is optional; without one, the gateway field is left as it was.
+# The "=" is optional too, so "Lab bench 192.168.50.10/24" reads the same way.
+# Blank lines, and lines starting with # or ; are ignored.
+#
+# Press Refresh in the dialog to reload this file without restarting.
+
+Lab bench     = 192.168.50.10/24
+Lab bench alt = 192.168.50.11/24, 192.168.50.1
+Test rig      = 10.0.2.15/255.255.255.0

@@ -42,6 +42,11 @@ struct AdapterInfo {
 // is empty and `error` says why.
 std::vector<AdapterInfo> enumerateAdapters(std::wstring& error);
 
+// Mask and prefix are the same fact in two notations, and both the dialog and
+// the preset file need to move between them.
+std::wstring maskFromPrefix(int prefix);                            // 24 -> "255.255.255.0"
+bool prefixFromMask(const std::wstring& mask, int& prefix);         // rejects a gappy mask
+
 struct ApplyRequest {
     std::wstring settingId;
     bool useDhcp = false;

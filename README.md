@@ -1,5 +1,7 @@
 # BNET — IP Address Manager
 
+[![release](https://img.shields.io/github/v/release/Flinterpop/BNET)](https://github.com/Flinterpop/BNET/releases)
+
 One dialog that does what the Windows IPv4 property sheets do.
 
 Setting a static address on Windows 10/11 means Settings → Network → Change adapter
@@ -20,6 +22,8 @@ and the full list of additional addresses, committed together by one **Apply**.
   servers.
 - **Adds and removes additional IP/mask pairs** on the same adapter — the part that
   normally lives behind the *Advanced* button.
+- **Offers named presets** — pick a named network from a list and send it to the primary
+  fields or straight into the additional list. See [Presets](#presets).
 - **Re-reads the system after every Apply**, so what you see afterwards is what Windows
   actually has, not what was asked for.
 
@@ -49,8 +53,13 @@ busy adapter and a frozen dialog looks like a crash.
   and offering one back as a static address would be a trap.
 - **A gateway off-subnet raises the same warning Windows gives**, for the same reason: it
   is unreachable and silently does nothing. You can override it.
-- **Masks are checked for contiguity** — a run of ones then a run of zeroes. `255.255.0.255`
-  is refused here rather than by WMI.
+- **The subnet mask is a pick list, defaulting to 255.255.255.0.** There are only 32 legal
+  IPv4 masks — a run of ones then a run of zeroes — so both mask fields offer all of them,
+  each labelled with its prefix length (`255.255.255.0   /24`). That makes an invalid mask
+  unrepresentable rather than merely rejected, which is why nothing validates one. The list
+  runs longest prefix first, so the small subnets people actually pick are at the top of it
+  rather than 24 rows down. An adapter's existing mask selects itself when you pick the
+  adapter.
 - **Double-click a row** in the additional list to lift it back into the entry fields for
   editing; press Add to put it back. That is the closest thing to editing in place without
   opening a second dialog.
@@ -59,6 +68,45 @@ busy adapter and a frozen dialog looks like a crash.
 - **Windows does not allow additional static addresses while DHCP is on**, and neither does
   this — the list is disabled under DHCP, the same as the *Advanced* dialog.
 - IPv6 is not touched. This is an IPv4 tool.
+
+## Presets
+
+The Preset list holds named networks, so a machine that moves between known ones is a pick,
+a button and an Apply. A preset serves the primary address and the additional list alike:
+
+- **Use as primary** puts its address, mask and gateway in the main fields, switching to
+  static if DHCP was selected.
+- **Add to list** appends it to the additional addresses instead, leaving the primary alone.
+
+Choosing a preset does nothing by itself — the destination is a button, not a side effect,
+so picking one can never silently overwrite an address you already entered. Both buttons
+stay disabled until a real preset is selected, and **Add to list** refuses an address that
+is already the primary or already in the list.
+
+**The presets are not compiled in.** A preset names a real network, and this repository is
+public — addresses, hostnames and MACs do not belong in a binary's defaults, which is the
+same rule that genericised DHCPDealer's. So the list is a file you own:
+
+```
+BNET.presets.txt        beside BNET.exe -- yours, and gitignored
+presets.example.txt     in this repository -- documentation addresses only
+```
+
+One preset per line, the `=` and the gateway both optional:
+
+```
+Lab bench     = 192.168.50.10/24
+Lab bench alt = 192.168.50.11/24, 192.168.50.1
+Test rig      = 10.0.2.15/255.255.255.0
+```
+
+The mask may be a prefix length or dotted. A malformed line is skipped and counted in the
+status line rather than rejecting the whole file. **Refresh** reloads presets as well as
+re-reading the adapters, so editing the file needs no restart. With no file present the
+list reads `(no presets file)` and the hint names the path to create.
+
+Either way it is only the dialog being filled in — Apply remains the one thing that touches
+the adapter.
 
 ## If an address doesn't appear in ipconfig
 
@@ -98,9 +146,11 @@ shows only `IPHLPAPI`, `WS2_32`, `COMCTL32`, `ole32`, `OLEAUT32`, `KERNEL32` and
 ## Layout
 
 ```
-src/NetConfig.h    adapter/apply model, no UI
-src/NetConfig.cpp  IP Helper enumeration + the WMI apply
-src/main.cpp       the dialog
-res/BNET.rc        dialog template, version info, manifest reference
-res/BNET.manifest  requireAdministrator, common controls v6, per-monitor DPI
+src/NetConfig.h      adapter/apply model, no UI
+src/NetConfig.cpp    IP Helper enumeration + the WMI apply
+src/Presets.h/.cpp   the named IP/mask file, deliberately not compiled in
+src/main.cpp         the dialog
+res/BNET.rc          dialog template, version info, manifest reference
+res/BNET.manifest    requireAdministrator, common controls v6, per-monitor DPI
+presets.example.txt  the preset file format, with documentation addresses
 ```
